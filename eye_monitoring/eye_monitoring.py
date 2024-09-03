@@ -11,129 +11,131 @@ from datetime import datetime
 right_limit = 0.35
 left_limit = 0.65
 blinking_constant = 0.38 * 10
+l_constant = 0
+r_constant = 1
 
+# Determines the state of eyes and what actions
 class EyeMonitoring(object):
-    """Position of eyes & whether opened or closed"""
-
     def __init__(self):
-        self.current_frame = None
+        self.current_image = None
         self.l_eye = None
         self.r_eye = None
         self.tuning = Tuning()
         
         # UNITTESTING - CSV File with gaze coordinates
         # File paths
-        self.excel_path = 'gaze_coordinates.xlsx'
-        self.df = pd.DataFrame(columns=['Timestamp', 'X Coordinate', 'Y Coordinate'])
+        #self.excel_path = 'gaze_coordinates.xlsx'
+        #self.df = pd.DataFrame(columns=['Timestamp', 'X Coordinate', 'Y Coordinate'])
 
-        # _face_detector is used to detect faces
-        self._facial_recognition = dlib.get_frontal_face_detector()
-
-        # _predictor is used to get facial landmarks of a given face
+        # used to detect a face using default Dlib
+        self._profile_recognition = dlib.get_frontal_face_detector()
         current_directory = os.path.abspath(os.path.dirname(__file__))
-        trained_model = os.path.abspath(os.path.join(current_directory, "trained_models/shape_predictor_68_face_landmarks.dat"))
-        self._predictor = dlib.shape_predictor(trained_model)
+        trained_model = os.path.abspath(os.path.join(current_directory, "ml_face_models/shape_predictor_68_face_landmarks.dat"))
+        self._sp = dlib.shape_predictor(trained_model)
+        
+    # Set eye & facial marks
+    def initialise(self):
+        # Selects current image from webcam and recognises a profile (face)
+        current_image = self.current_image
+        image = cv2.cvtColor(current_image, cv2.COLOR_BGR2GRAY)
+        detected_profile = self._profile_recognition(image)
+        try:
+            # attempt to land points around eyes
+            detected_profile_first_element = detected_profile[0]
+            facial_lmarks = self._sp(image, detected_profile[l_constant])
+            self.l_eye = Eye(image, facial_lmarks, l_constant, self.tuning)
+            self.r_eye = Eye(image, facial_lmarks, r_constant, self.tuning)
+        except:
+            # assume eyes do not exist
+            EmptyState = None
+            self.l_eye = EmptyState
+            self.r_eye = EmptyState
+        
+    # Updates the image the algorithm is working with
+    def update(self, image):
+        current_image = image
+        self.current_image = current_image
+        self.initialise()
+        #self.record_coordinates() #UNITTEST    
 
+    # Determines the state of eyes and what actions
     @property
     def detected_ppls(self):
-        """Check that the pupils have been located"""
         try:
-            int(self.l_eye.pupil.x)
-            int(self.l_eye.pupil.y)
-            int(self.r_eye.pupil.x)
-            int(self.r_eye.pupil.y)
+            # Attempt to convert coordinates to integers
+            l_pupil_x = int(self.l_eye.pupil.x)
+            l_pupil_y = int(self.l_eye.pupil.y)
+            r_pupil_x = int(self.r_eye.pupil.x)
+            r_pupil_y = int(self.r_eye.pupil.y)
             return True
         except Exception:
             return False
-
-    def _initialise(self):
-        """Detects the face and initialize Eye objects"""
-        image = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
-        detected_face = self._facial_recognition(image)
-
-        try:
-            facial_lmarks = self._predictor(image, detected_face[0])
-            self.l_eye = Eye(image, facial_lmarks, 0, self.tuning)
-            self.r_eye = Eye(image, facial_lmarks, 1, self.tuning)
-
-        except IndexError:
-            self.l_eye = None
-            self.r_eye = None
-
-    def update(self, eye):
-        """Refreshes the frame and analyzes it."""
-        self.current_frame = eye
-        self._initialise()
-        self.record_coordinates() #UNITTEST
-
-    def coordinates_l(self):
-        """Coords of the left pupil"""
-        if self.detected_ppls:
-            coordx = self.l_eye.initial[0] + self.l_eye.pupil.x #.origin -> .initial
-            coordy = self.l_eye.initial[1] + self.l_eye.pupil.y #.origin -> .initial
-            return (coordx, coordy)
-
-    def coordinates_r(self):
-        """Coords of right pupil"""
-        if self.detected_ppls:
-            coordx = self.r_eye.initial[0] + self.r_eye.pupil.x #.origin -> .initial
-            coordy = self.r_eye.initial[1] + self.r_eye.pupil.y
-            return (coordx, coordy)
-
+        
+    # The extreme right is 0.0, the center is 0.5 and the extreme left is 1.0
     def x_plane_direction(self):
-        """X plane ratio of where the user is looking: The extreme right is 0.0,
-        the center is 0.5 and the extreme left is 1.0
-        """
-        if self.detected_ppls:
-            left_p = self.l_eye.pupil.x / (self.l_eye.middle[0] * 2 - 10) #.center -> .middle x4 below
-            right_p = self.r_eye.pupil.x / (self.r_eye.middle[0] * 2 - 10)
-            return (left_p + right_p) / 2
+        if not self.detected_ppls:
+            return None
+        left_p = self.l_eye.pupil.x / (self.l_eye.middle[0] * 2 - 10) #.center -> .middle x4 below
+        right_p = self.r_eye.pupil.x / (self.r_eye.middle[0] * 2 - 10)
+        total_p = left_p + right_p
+        result = total_p/2
+        return result
 
+    # The extreme top is 0.0, the center is 0.5 and the extreme bottom is 1.0 
     def y_plane_direction(self):
-        """Y plane ratio of where the user is looking: The extreme top is 0.0,
-        the center is 0.5 and the extreme bottom is 1.0
-        """
-        if self.detected_ppls:
-            left_p = self.l_eye.pupil.y / (self.l_eye.middle[1] * 2 - 10)
-            right_p = self.r_eye.pupil.y / (self.r_eye.middle[1] * 2 - 10)
-            return (left_p + right_p) / 2
+        if not self.detected_ppls:
+            return None
+        left_p = self.l_eye.pupil.y / (self.l_eye.middle[1] * 2 - 10)
+        right_p = self.r_eye.pupil.y / (self.r_eye.middle[1] * 2 - 10)
+        total_p = left_p + right_p
+        result = total_p/2
+        return result
 
-    def looking_to_right(self):
-        """Returns true if the user is looking to the right"""
-        if self.detected_ppls:
-            return self.x_plane_direction() <= right_limit
+    # Coords of left core
+    def coordinates_l(self):
+        if not self.detected_ppls:
+            return None
+        coordx = self.l_eye.initial[l_constant] + self.l_eye.pupil.x #.origin -> .initial
+        coordy = self.l_eye.initial[1] + self.l_eye.pupil.y #.origin -> .initial
+        return (coordx, coordy)
 
-    def looking_to_left(self):
-        """Returns true if the user is looking to the left"""
-        if self.detected_ppls:
-            return self.x_plane_direction() >= left_limit
+    # Coords of right core
+    def coordinates_r(self):
+        if not self.detected_ppls:
+            return None
+        coordx = self.r_eye.initial[0] + self.r_eye.pupil.x #.origin -> .initial
+        coordy = self.r_eye.initial[r_constant] + self.r_eye.pupil.y
+        return (coordx, coordy)
 
-    def looking_at_centre(self):
-        """Using two previous functions to determine if user is making eye contact"""
-        if self.detected_ppls:
-            return self.looking_to_right() is not True and self.looking_to_left() is not True
-
+    # Returns boolean: True if Closed, False if Other
     def is_blinking(self):
-        """Returns true if the user closes his eyes"""
         if self.detected_ppls:
-            eyes_closed_r = (self.l_eye.blinking + self.r_eye.blinking) / 2
+            sum_blinking = self.l_eye.blinking + self.r_eye.blinking
+            eyes_closed_r = sum_blinking * 0.5
             return eyes_closed_r > blinking_constant
 
-    def pupils_indicator(self):
-        """Graphical indication of the eyes"""
-        image = self.current_frame.copy()
+    # Returns boolean: True if Right, False if Other
+    def looking_to_right(self):
+        if not self.detected_ppls:
+            return False
+        # Calculate and return whether the x-plane direction is to the right
+        return self.x_plane_direction() <= right_limit
 
-        if self.detected_ppls:
-            color = (0, 255, 0)
-            lx, ly = self.coordinates_l()
-            rx, ry = self.coordinates_r()
-            cv2.line(image, (lx - 5, ly), (lx + 5, ly), color)
-            cv2.line(image, (lx, ly - 5), (lx, ly + 5), color)
-            cv2.line(image, (rx - 5, ry), (rx + 5, ry), color)
-            cv2.line(image, (rx, ry - 5), (rx, ry + 5), color)
+    # Returns boolean: True if Left, False if Other
+    def looking_to_left(self):
+        if not self.detected_ppls:
+            return False
+        # Calculate and return whether the x-plane direction is to the left
+        return self.x_plane_direction() >= left_limit
 
-        return image
+    # Returns boolean: True if Centre, False if Other
+    def looking_at_centre(self):
+        if not self.detected_ppls:
+            return False
+        # Determine if  looking not to the right or left, implying it is centered
+        return not self.looking_to_right() and not self.looking_to_left()
 
+    # Recording coordinates for testing purpose
     def record_coordinates(self):
         """Record the coordinates to an Excel file"""
         if self.detected_ppls:
